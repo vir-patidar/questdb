@@ -805,7 +805,7 @@ public class TableWriterTest extends AbstractCairoTest {
             Rnd rnd = new Rnd();
             class X extends FilesFacadeImpl {
                 @Override
-                public boolean rmdir(Path name) {
+                public boolean rmdir(Path name, boolean lazy) {
                     return false;
                 }
             }
@@ -929,12 +929,12 @@ public class TableWriterTest extends AbstractCairoTest {
             }
 
             @Override
-            public boolean rmdir(Path name) {
+            public boolean rmdir(Path name, boolean lazy) {
                 if (this.fd != -1) {
                     // Access denied, file is open
                     return false;
                 }
-                return super.rmdir(name);
+                return super.rmdir(name, lazy);
             }
         };
 
@@ -1182,11 +1182,11 @@ public class TableWriterTest extends AbstractCairoTest {
                 boolean fail = false;
 
                 @Override
-                public boolean rmdir(Path name) {
+                public boolean rmdir(Path name, boolean lazy) {
                     if (fail) {
                         return false;
                     }
-                    return super.rmdir(name);
+                    return super.rmdir(name, lazy);
                 }
             }
 
@@ -2669,12 +2669,12 @@ public class TableWriterTest extends AbstractCairoTest {
             boolean removeAttempted = false;
 
             @Override
-            public boolean rmdir(Path from) {
+            public boolean rmdir(Path from, boolean lazy) {
                 if (Chars.endsWith(from, "2013-03-12.0")) {
                     removeAttempted = true;
                     return false;
                 }
-                return super.rmdir(from);
+                return super.rmdir(from, lazy);
             }
         }
 
@@ -2720,12 +2720,12 @@ public class TableWriterTest extends AbstractCairoTest {
             boolean removeAttempted = false;
 
             @Override
-            public boolean rmdir(Path path) {
+            public boolean rmdir(Path path, boolean lazy) {
                 if (Chars.endsWith(path, "2013-03-12.0")) {
                     removeAttempted = true;
                     return false;
                 }
-                return super.rmdir(path);
+                return super.rmdir(path, lazy);
             }
         }
 

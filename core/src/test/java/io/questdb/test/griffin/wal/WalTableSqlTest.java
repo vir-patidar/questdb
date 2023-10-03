@@ -921,12 +921,12 @@ public class WalTableSqlTest extends AbstractCairoTest {
             int count = 0;
 
             @Override
-            public boolean rmdir(Path path) {
+            public boolean rmdir(Path path, boolean lazy) {
                 if (Chars.equals(path, pretendNotExist.get()) && count++ == 0) {
                     super.rmdir(Path.getThreadLocal(pretendNotExist.get()).concat(SEQ_DIR).$());
                     return false;
                 }
-                return super.rmdir(path);
+                return super.rmdir(path, lazy);
             }
         };
 

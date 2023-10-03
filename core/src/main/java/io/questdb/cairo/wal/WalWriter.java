@@ -95,6 +95,7 @@ public class WalWriter implements TableWriterAPI {
     private long currentTxnStartRowNum = -1;
     private boolean distressed;
     private int lastSegmentTxn = -1;
+    private long lastSeqTxn = NO_TXN;
     private boolean open;
     private boolean rollSegmentOnNextRow = false;
     private int segmentId = -1;
@@ -106,7 +107,6 @@ public class WalWriter implements TableWriterAPI {
     private long txnMinTimestamp = Long.MAX_VALUE;
     private boolean txnOutOfOrder = false;
     private int walLockFd = -1;
-    private long lastSeqTxn = NO_TXN;
 
     public WalWriter(
             CairoConfiguration configuration,
@@ -246,7 +246,7 @@ public class WalWriter implements TableWriterAPI {
                     rollback();
                 }
             } finally {
-                doClose(true);
+                doClose(walInitializer.isTruncateFilesOnClose());
             }
         }
     }
@@ -290,11 +290,16 @@ public class WalWriter implements TableWriterAPI {
         if (open) {
             open = false;
             if (metadata != null) {
-                metadata.close(Vm.TRUNCATE_TO_POINTER);
+                metadata.close(truncate, Vm.TRUNCATE_TO_POINTER);
             }
-            Misc.free(events);
+            if (events != null) {
+                events.close(truncate, Vm.TRUNCATE_TO_POINTER);
+            }
             freeSymbolMapReaders();
-            Misc.free(symbolMapMem);
+            if (symbolMapMem != null) {
+                symbolMapMem.close(truncate, Vm.TRUNCATE_TO_POINTER);
+            }
+
             freeColumns(truncate);
 
             releaseSegmentLock(segmentId, segmentLockFd, segmentRowCount);
@@ -787,6 +792,27 @@ public class WalWriter implements TableWriterAPI {
         return lastSeqTxn = txn;
     }
 
+    private boolean breachedRolloverSizeThreshold() {
+        final long threshold = configuration.getWalSegmentRolloverSize();
+        if (threshold == 0) {
+            return false;
+        }
+
+        long tally = 0;
+        for (int colIndex = 0, colCount = columns.size(); colIndex < colCount; ++colIndex) {
+            final MemoryMA column = columns.getQuick(colIndex);
+            if ((column != null) && !(column instanceof NullMemory)) {
+                final long columnSize = column.getAppendOffset();
+                tally += columnSize;
+            }
+        }
+
+        // The events file will also contain the symbols.
+        tally += events.size();
+
+        return tally > threshold;
+    }
+
     private void checkDistressed() {
         if (!distressed) {
             return;
@@ -1014,7 +1040,7 @@ public class WalWriter implements TableWriterAPI {
                     }
                 }
 
-                if (columnType == ColumnType.SYMBOL || columnType == -ColumnType.SYMBOL) {
+                if (columnType == ColumnType.SYMBOL) {
                     denseSymbolIndex++;
                 }
             }
@@ -1050,9 +1076,9 @@ public class WalWriter implements TableWriterAPI {
     private void freeAndRemoveColumnPair(ObjList<MemoryMA> columns, int pi, int si) {
         final MemoryMA primaryColumn = columns.getAndSetQuick(pi, NullMemory.INSTANCE);
         final MemoryMA secondaryColumn = columns.getAndSetQuick(si, NullMemory.INSTANCE);
-        primaryColumn.close(true, Vm.TRUNCATE_TO_POINTER);
+        primaryColumn.close(isTruncateFilesOnClose(), Vm.TRUNCATE_TO_POINTER);
         if (secondaryColumn != null) {
-            secondaryColumn.close(true, Vm.TRUNCATE_TO_POINTER);
+            secondaryColumn.close(isTruncateFilesOnClose(), Vm.TRUNCATE_TO_POINTER);
         }
     }
 
@@ -1108,6 +1134,10 @@ public class WalWriter implements TableWriterAPI {
         return false;
     }
 
+    private boolean isTruncateFilesOnClose() {
+        return this.walInitializer.isTruncateFilesOnClose();
+    }
+
     private void lockWal() {
         try {
             lockName(path);
@@ -1130,9 +1160,12 @@ public class WalWriter implements TableWriterAPI {
     }
 
     private void mayRollSegmentOnNextRow() {
-        if (!rollSegmentOnNextRow && (segmentRowCount >= configuration.getWalSegmentRolloverRowCount()) || lastSegmentTxn > Integer.MAX_VALUE - 2) {
-            rollSegmentOnNextRow = true;
+        if (rollSegmentOnNextRow) {
+            return;
         }
+        rollSegmentOnNextRow = (segmentRowCount >= configuration.getWalSegmentRolloverRowCount())
+                || breachedRolloverSizeThreshold()
+                || (lastSegmentTxn > Integer.MAX_VALUE - 2);
     }
 
     private void mkWalDir() {
@@ -1146,7 +1179,7 @@ public class WalWriter implements TableWriterAPI {
     private void openColumnFiles(CharSequence name, int columnIndex, int pathTrimToLen) {
         try {
             final MemoryMA mem1 = getPrimaryColumn(columnIndex);
-            mem1.close(true, Vm.TRUNCATE_TO_POINTER);
+            mem1.close(isTruncateFilesOnClose(), Vm.TRUNCATE_TO_POINTER);
             mem1.of(
                     ff,
                     dFile(path.trimTo(pathTrimToLen), name),
@@ -1159,7 +1192,7 @@ public class WalWriter implements TableWriterAPI {
 
             final MemoryMA mem2 = getSecondaryColumn(columnIndex);
             if (mem2 != null) {
-                mem2.close(true, Vm.TRUNCATE_TO_POINTER);
+                mem2.close(isTruncateFilesOnClose(), Vm.TRUNCATE_TO_POINTER);
                 mem2.of(
                         ff,
                         iFile(path.trimTo(pathTrimToLen), name),
@@ -1215,7 +1248,7 @@ public class WalWriter implements TableWriterAPI {
             }
 
             segmentRowCount = 0;
-            metadata.switchTo(path, segmentPathLen);
+            metadata.switchTo(path, segmentPathLen, isTruncateFilesOnClose());
             events.openEventFile(path, segmentPathLen);
             if (commitMode != CommitMode.NOSYNC) {
                 events.sync();
@@ -1476,14 +1509,14 @@ public class WalWriter implements TableWriterAPI {
                 long newOffset = newColumnFiles.get(i * NEW_COL_RECORD_SIZE + 2);
                 primaryColumnFile.jumpTo(currentOffset);
 
-                primaryColumnFile.switchTo(newPrimaryFd, newOffset, Vm.TRUNCATE_TO_POINTER);
+                primaryColumnFile.switchTo(newPrimaryFd, newOffset, isTruncateFilesOnClose(), Vm.TRUNCATE_TO_POINTER);
                 int newSecondaryFd = (int) newColumnFiles.get(i * NEW_COL_RECORD_SIZE + 3);
                 if (newSecondaryFd > -1) {
                     MemoryMA secondaryColumnFile = getSecondaryColumn(i);
                     currentOffset = newColumnFiles.get(i * NEW_COL_RECORD_SIZE + 4);
                     newOffset = newColumnFiles.get(i * NEW_COL_RECORD_SIZE + 5);
                     secondaryColumnFile.jumpTo(currentOffset);
-                    secondaryColumnFile.switchTo(newSecondaryFd, newOffset, Vm.TRUNCATE_TO_POINTER);
+                    secondaryColumnFile.switchTo(newSecondaryFd, newOffset, isTruncateFilesOnClose(), Vm.TRUNCATE_TO_POINTER);
                 }
             }
         }
@@ -1652,7 +1685,7 @@ public class WalWriter implements TableWriterAPI {
                         // we should switch metadata to this new segment
                         path.trimTo(rootLen).slash().put(segmentId);
                         // this will close old _meta file and create the new one
-                        metadata.switchTo(path, path.length());
+                        metadata.switchTo(path, path.length(), isTruncateFilesOnClose());
                         openColumnFiles(columnName, columnIndex, path.length());
                     }
                     // if we did not have to roll uncommitted rows to a new segment
@@ -1666,7 +1699,7 @@ public class WalWriter implements TableWriterAPI {
                     if (securityContext != null) {
                         ddlListener.onColumnAdded(securityContext, metadata.getTableToken(), columnName);
                     }
-                    LOG.info().$("added column to WAL [path=").$(path).$(Files.SEPARATOR).$(segmentId).$(", columnName=").utf8(columnName).I$();
+                    LOG.info().$("added column to WAL [path=").$(path).$(", columnName=").utf8(columnName).I$();
                 } else {
                     throw CairoException.critical(0).put("column '").put(columnName)
                             .put("' was added, cannot apply commit because of concurrent table definition change");
@@ -1722,7 +1755,7 @@ public class WalWriter implements TableWriterAPI {
                             // we should switch metadata to this new segment
                             path.trimTo(rootLen).slash().put(segmentId);
                             // this will close old _meta file and create the new one
-                            metadata.switchTo(path, path.length());
+                            metadata.switchTo(path, path.length(), isTruncateFilesOnClose());
                         }
                         // if we did not have to roll uncommitted rows to a new segment
                         // it will switch metadata file on next row write
@@ -1772,7 +1805,7 @@ public class WalWriter implements TableWriterAPI {
                             // we should switch metadata to this new segment
                             path.trimTo(rootLen).slash().put(segmentId);
                             // this will close old _meta file and create the new one
-                            metadata.switchTo(path, path.length());
+                            metadata.switchTo(path, path.length(), isTruncateFilesOnClose());
                             renameColumnFiles(columnType, columnName, newColumnName);
                         }
                         // if we did not have to roll uncommitted rows to a new segment

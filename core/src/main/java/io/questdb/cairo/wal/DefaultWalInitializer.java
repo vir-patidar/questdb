@@ -24,7 +24,6 @@
 
 package io.questdb.cairo.wal;
 
-import io.questdb.cairo.TableToken;
 import io.questdb.std.str.Path;
 
 public class DefaultWalInitializer implements WalInitializer {
@@ -35,6 +34,16 @@ public class DefaultWalInitializer implements WalInitializer {
     }
 
     @Override
+    public boolean isInUse(Path path) {
+        return false;
+    }
+
+    @Override
     public void rollbackDirectory(Path path) {
+    }
+
+    @Override
+    public boolean isTruncateFilesOnClose() {
+        return true;
     }
 }

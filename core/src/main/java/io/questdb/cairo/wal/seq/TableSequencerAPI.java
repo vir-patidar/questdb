@@ -67,6 +67,16 @@ public class TableSequencerAPI implements QuietCloseable {
         this.createTxnTracker = dir -> new SeqTxnTracker();
     }
 
+    public void applyRename(TableToken tableToken) {
+        try (TableSequencerImpl sequencer = openSequencerLocked(tableToken, SequencerLockType.WRITE)) {
+            try {
+                sequencer.notifyRename(tableToken);
+            } finally {
+                sequencer.unlockWrite();
+            }
+        }
+    }
+
     @Override
     public void close() {
         closed = true;
@@ -205,6 +215,14 @@ public class TableSequencerAPI implements QuietCloseable {
             }
             return walId;
         }
+    }
+
+    public long getSeqTxn(TableToken tableToken) {
+        return getSeqTxnTracker(tableToken).getSeqTxn();
+    }
+
+    public long getWriterTxn(TableToken tableToken) {
+        return getSeqTxnTracker(tableToken).getWriterTxn();
     }
 
     public long getTableMetadata(final TableToken tableToken, final TableRecordMetadataSink sink) {
