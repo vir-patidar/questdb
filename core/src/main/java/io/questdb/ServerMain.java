@@ -198,13 +198,14 @@ public class ServerMain implements Closeable {
         return running.get();
     }
 
-    public void start() {
-        start(false);
+    public void postInitialize() {
+        // no-op
     }
 
     public synchronized void start(boolean addShutdownHook) {
         if (!closed.get() && running.compareAndSet(false, true)) {
             initialize();
+            postInitialize();
 
             if (addShutdownHook) {
                 addShutdownHook();
@@ -214,6 +215,25 @@ public class ServerMain implements Closeable {
             System.gc(); // final GC
             log.advisoryW().$("enjoy").$();
         }
+    }
+
+    public void start() {
+        start(false);
+    }
+
+    private void addShutdownHook() {
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            try {
+                System.err.println("QuestDB is shutting down...");
+                System.err.println("Pre-touch magic number: " + AsyncFilterAtom.PRE_TOUCH_BLACK_HOLE.sum());
+                close();
+                LogFactory.closeInstance();
+            } catch (Error ignore) {
+                // ignore
+            } finally {
+                System.err.println("QuestDB is shutdown.");
+            }
+        }));
     }
 
     private synchronized void initialize() {
@@ -335,21 +355,6 @@ public class ServerMain implements Closeable {
 
         System.gc(); // GC 1
         log.advisoryW().$("server is ready to be started").$();
-    }
-
-    private void addShutdownHook() {
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            try {
-                System.err.println("QuestDB is shutting down...");
-                System.err.println("Pre-touch magic number: " + AsyncFilterAtom.PRE_TOUCH_BLACK_HOLE.sum());
-                close();
-                LogFactory.closeInstance();
-            } catch (Error ignore) {
-                // ignore
-            } finally {
-                System.err.println("QuestDB is shutdown.");
-            }
-        }));
     }
 
     protected void setupWalApplyJob(
