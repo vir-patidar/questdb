@@ -39,12 +39,10 @@ public class SeqTxnTracker {
     private volatile int suspendedState = 0;
     private volatile long writerTxn = -1;
 
-    @TestOnly
     public long getSeqTxn() {
         return seqTxn;
     }
 
-    @TestOnly
     public long getWriterTxn() {
         return writerTxn;
     }
@@ -112,14 +110,6 @@ public class SeqTxnTracker {
 
     public void setUnsuspended() {
         this.suspendedState = 1;
-    }
-
-    public long getSeqTxn() {
-        return seqTxn;
-    }
-
-    public long getWriterTxn() {
-        return writerTxn;
     }
 
     static {
