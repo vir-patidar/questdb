@@ -82,10 +82,13 @@ struct instruction_t {
 struct jit_value_t {
 
     inline jit_value_t() noexcept
-            : op_(), type_(), kind_() {}
+            : extra_(), op_(), type_(), kind_() {}
 
     inline jit_value_t(asmjit::Operand op, data_type_t type, data_kind_t kind) noexcept
-            : op_(op), type_(type), kind_(kind) {}
+            : extra_(), op_(op), type_(type), kind_(kind) {}
+
+    inline jit_value_t(asmjit::Operand extra, asmjit::Operand op, data_type_t type, data_kind_t kind) noexcept
+            : extra_(extra), op_(op), type_(type), kind_(kind) {}
 
     inline jit_value_t(const jit_value_t &other) noexcept = default;
 
@@ -103,11 +106,29 @@ struct jit_value_t {
 
     inline const asmjit::Operand &op() const noexcept { return op_; }
 
+    inline const asmjit::x86::Ymm &ymm_extra() const noexcept { return extra_.as<asmjit::x86::Ymm>(); }
+
+    inline const asmjit::x86::Xmm &xmm_extra() const noexcept { return extra_.as<asmjit::x86::Xmm>(); }
+
+    inline const asmjit::x86::Gpq &gp_extra() const noexcept { return extra_.as<asmjit::x86::Gpq>(); }
+
+    inline const asmjit::Operand &extra() const noexcept { return extra_; }
 private:
+    asmjit::Operand extra_;
     asmjit::Operand op_;
     data_type_t type_;
     data_kind_t kind_;
 };
+
+inline bool is_varlen(data_type_t type) {
+    switch (type) {
+	case data_type_t::string_header:
+        case data_type_t::binary_header:
+            return true;
+        default:
+	    return false;
+    }
+}
 
 inline uint32_t type_shift(data_type_t type) {
     switch (type) {
@@ -117,9 +138,10 @@ inline uint32_t type_shift(data_type_t type) {
             return 1;
         case data_type_t::i32:
         case data_type_t::f32:
-            return 2;
         case data_type_t::i64:
         case data_type_t::f64:
+	case data_type_t::string_header:
+        case data_type_t::binary_header:
             return 3;
         case data_type_t::i128:
             return 4;
