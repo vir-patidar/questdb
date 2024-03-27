@@ -545,37 +545,25 @@ public class CompiledFilterRegressionTest extends AbstractCairoTest {
     }
 
     @Test
-    public void testStringNullComparisonSimple() throws Exception {
+    public void testStringNullComparisonStr() throws Exception {
+        final String query = "select * from x where string_value = null";
         final String ddl = "create table x as (select" +
                 " timestamp_sequence(400000000000, 500000000) as k," +
-                " rnd_str('aaaaaaaaaaaa', 'bbbbbbbbbbbb', 'cccccccccccccc') string_value" +
+                " rnd_str(2, 1, 5, 3) string_value" +
                 " from long_sequence(10)) timestamp(k)";
-        final FilterGenerator gen = new FilterGenerator()
-                .withAnyOf("string_value")
-                .withEqualityOperator()
-                .withAnyOf("null")
-                .withBooleanOperator()
-                .withAnyOf("string_value")
-                .withEqualityOperator()
-                .withAnyOf("null");
-        assertGeneratedQueryNullable("select * from x", ddl, gen);
+
+        assertQueryNullable(query, ddl);
     }
 
     @Test
     public void testStringNullComparisonBin() throws Exception {
+        final String query = "select * from x where binary_value = null";
+
         final String ddl = "create table x as (select" +
                 " timestamp_sequence(400000000000, 500000000) as k," +
                 " rnd_bin(1, 32, 3) binary_value" +
                 " from long_sequence(10)) timestamp(k)";
-        final FilterGenerator gen = new FilterGenerator()
-                .withAnyOf("binary_value")
-                .withEqualityOperator()
-                .withAnyOf("null")
-                .withBooleanOperator()
-                .withAnyOf("binary_value")
-                .withEqualityOperator()
-                .withAnyOf("null");
-        assertGeneratedQueryNullable("select * from x", ddl, gen);
+        assertQueryNullable(query, ddl);
     }
 
     @Test
@@ -584,7 +572,7 @@ public class CompiledFilterRegressionTest extends AbstractCairoTest {
                 " timestamp_sequence(400000000000, 500000000) as k," +
                 " rnd_str(2, 1, 5, 3) string_value," +
                 " rnd_bin(1, 32, 3) binary_value" +
-                " from long_sequence(1000)) timestamp(k)";
+                " from long_sequence(10)) timestamp(k)";
         final FilterGenerator gen = new FilterGenerator()
                 .withAnyOf("string_value", "binary_value")
                 .withEqualityOperator()

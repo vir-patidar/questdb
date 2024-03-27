@@ -103,6 +103,7 @@ namespace questdb::x86 {
     }
 
     jit_value_t load_length(Compiler &c, jit_value_t value) {
+	c.commentf("load_length, value_type: %d", value.dtype());
         // Column has variable-length data. Load the value of its header
         // (i.e., data length). It can also indicate a NULL value, encoded as length -1.
         // We reach the header by looking up its offset in the varlen index.
@@ -120,11 +121,7 @@ namespace questdb::x86 {
         c.mov(length, aux);
         int header_size = value.dtype() == data_type_t::string_header ? 4 : 8;
         c.sub(length, offset);
-	c.add(length, 0);
-	c.add(length, 0);
-	c.add(length, 0);
-	c.add(length, 0);
-	c.add(length, 0);
+	c.commentf("header_size: %d", header_size);
         c.sub(length, header_size);
         // length now contains the length of the value. It can be zero for two reasons:
         // empty value or NULL value.
@@ -137,8 +134,10 @@ namespace questdb::x86 {
         // c.mov(length, ptr(data.getBase(), offset, 0, 0, header_size));
         c.bind(l_nonzero);
         if (header_size == 4) {
+	    c.comment("return length 32");
             return {length.r32(), data_type_t::i32, data_kind_t::kMemory};
         }
+	    c.comment("return length 64");
         return {length, data_type_t::i64, data_kind_t::kMemory};
     }
 
@@ -150,7 +149,6 @@ namespace questdb::x86 {
         c.mov(column_address, ptr(cols_ptr, 8 * column_idx, 8));
 	c.comment("WTF?");
         if (is_varlen(type)) {
-	    printf("### VarlenType");
 	    Gp varlen_aux_address = c.newInt64("varlen_aux_address");
             c.mov(varlen_aux_address, ptr(varlen_indexes_ptr, 8 * column_idx, 8));
             return read_mem_varlen(c, type, column_address, varlen_aux_address, input_index);
@@ -215,6 +213,7 @@ namespace questdb::x86 {
 
     jit_value_t read_imm(Compiler &c, const instruction_t &instr) {
         auto type = static_cast<data_type_t>(instr.options);
+	c.commentf("imm for type: %d", type);
         switch (type) {
             case data_type_t::i8:
             case data_type_t::i16:
@@ -553,9 +552,20 @@ namespace questdb::x86 {
         }
     }
 
+    jit_value_t load_varlen_reg(Compiler &c, const jit_value_t &v) {
+	    if (v.op().isMem()) {
+		return load_length(c, v);
+	    } else if (v.op().isImm()) {
+		return imm2reg(c, v.dtype(), v);
+	    } else {
+		return v;
+	    }
+    }
+
     jit_value_t cmp_eq_varlen(Compiler &c, const jit_value_t &l, const jit_value_t &r) {
-        auto lhs = l.op().isMem() ? load_length(c, l) : l;
-        auto rhs = r.op().isMem() ? load_length(c, r) : r;
+        auto lhs = load_varlen_reg(c, l);
+        auto rhs = load_varlen_reg(c, r);
+
         auto dt = lhs.dtype();
         auto dk = dst_kind(lhs, rhs);
         switch (dt) {
@@ -569,8 +579,8 @@ namespace questdb::x86 {
     }
 
     jit_value_t cmp_ne_varlen(Compiler &c, const jit_value_t &l, const jit_value_t &r) {
-        auto lhs = l.op().isMem() ? load_length(c, l) : l;
-        auto rhs = r.op().isMem() ? load_length(c, r) : r;
+        auto lhs = load_varlen_reg(c, l);
+        auto rhs = load_varlen_reg(c, r);
         auto dt = lhs.dtype();
         auto dk = dst_kind(lhs, rhs);
         switch (dt) {
@@ -805,10 +815,12 @@ namespace questdb::x86 {
                 case opcodes::Mem: {
                     auto type = static_cast<data_type_t>(instr.options);
                     auto idx  = static_cast<int32_t>(instr.ipayload.lo);
+		    c.commentf("read memory for type: %d", type);
                     values.append(read_mem(c, type, idx, cols_ptr, varlen_indexes_ptr, input_index));
                 }
                     break;
                 case opcodes::Imm:
+		    c.comment("read imm");
                     values.append(read_imm(c, instr));
                     break;
                 case opcodes::Neg:
