@@ -23,12 +23,13 @@ This is detailed example of how to install and build on FreeBSD 12 stock VM
 image.
 
 1. Install Open JDK (11 at the time of writing), gcc (10 in the below example),
-   cmake:
+   cmake, and nasm:
 
 ```bash
-pkg install openjdk11-11.0.8+10.1
-pkg install gcc10-devel
-pkg install cmake
+pkg install openjdk11 \
+            gcc10 \
+            cmake \
+            nasm
 ```
 
 2. Add JAVA_HOME and reload the profile:
