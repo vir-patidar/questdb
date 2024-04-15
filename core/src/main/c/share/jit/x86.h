@@ -175,11 +175,11 @@ namespace questdb::x86 {
         }
 
         Gp column_address = c.newInt64("column_address");
-        c.mov(column_address, ptr(cols_ptr, 8 * column_idx, 8));
+        c.mov(column_address, ptr(data_ptr, 8 * column_idx, 8));
 
         if (is_varlen(type)) {
             Gp varsize_aux_address = c.newInt64("varsize_aux_address");
-            c.mov(varsize_aux_address, ptr(varsize_indexes_ptr, 8 * column_idx, 8));
+            c.mov(varsize_aux_address, ptr(varsize_aux_ptr, 8 * column_idx, 8));
             return read_mem_varsize(c, type, column_address, varsize_aux_address, input_index);
         }
 
