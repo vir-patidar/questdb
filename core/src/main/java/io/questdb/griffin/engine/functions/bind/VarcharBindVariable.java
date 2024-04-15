@@ -32,14 +32,13 @@ import io.questdb.griffin.engine.functions.VarcharFunction;
 import io.questdb.std.Mutable;
 import io.questdb.std.Numbers;
 import io.questdb.std.datetime.microtime.TimestampFormatUtils;
-import io.questdb.std.str.Utf16Sink;
-import io.questdb.std.str.Utf8Sequence;
-import io.questdb.std.str.Utf8Sink;
-import io.questdb.std.str.Utf8StringSink;
+import io.questdb.std.str.*;
 
 public class VarcharBindVariable extends VarcharFunction implements ScalarFunction, Mutable {
     private final int floatScale;
-    private final Utf8StringSink utf8Sink = new Utf8StringSink();
+    // we should use the "direct" version of the sink
+    // because bind variable is reused to pass variable-sized constants to the native JIT code.
+    private final DirectUtf8Sink utf8Sink = new DirectUtf8Sink(16);
     private boolean isNull = true;
 
     public VarcharBindVariable(int floatScale) {

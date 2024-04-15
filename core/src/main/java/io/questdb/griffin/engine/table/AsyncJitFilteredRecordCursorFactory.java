@@ -43,6 +43,7 @@ import io.questdb.griffin.engine.functions.bind.CompiledFilterSymbolBindVariable
 import io.questdb.jit.CompiledFilter;
 import io.questdb.mp.SCSequence;
 import io.questdb.std.*;
+import io.questdb.std.str.Utf8Sequence;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -332,6 +333,10 @@ public class AsyncJitFilteredRecordCursorFactory extends AbstractRecordCursorFac
     ) throws SqlException {
         final int columnType = function.getType();
         final int columnTypeTag = ColumnType.tagOf(columnType);
+        // serialisation format is two longs,
+        // first long is padding for fixed size types or size of variable size types
+        long appendOffset = bindVarMemory.getAppendOffset();
+        bindVarMemory.putLong(0); // add padding for fixed size types
         switch (columnTypeTag) {
             case ColumnType.BOOLEAN:
                 bindVarMemory.putLong(function.getBool(null) ? 1 : 0);
@@ -384,6 +389,16 @@ public class AsyncJitFilteredRecordCursorFactory extends AbstractRecordCursorFac
                 return;
             case ColumnType.DOUBLE:
                 bindVarMemory.putDouble(function.getDouble(null));
+                return;
+            case ColumnType.VARCHAR:
+                final Utf8Sequence utf8 = function.getVarcharA(null);
+                if (utf8 == null) {
+                    bindVarMemory.putLong(0);
+                    bindVarMemory.putLong(appendOffset, -1);
+                    return;
+                }
+                bindVarMemory.putLong(utf8.ptr());
+                bindVarMemory.putLong(appendOffset, utf8.size()); // overwrite padding with size
                 return;
             default:
                 throw SqlException.position(0).put("unsupported bind variable type: ").put(ColumnType.nameOf(columnTypeTag));
