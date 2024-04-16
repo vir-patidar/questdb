@@ -31,26 +31,29 @@
 namespace questdb::x86 {
     using namespace asmjit::x86;
 
-    jit_value_t
-    read_vars_mem(Compiler &c, data_type_t type, int32_t idx, const Gp &vars_ptr) {
+    jit_value_t read_bind_variables_mem(Compiler &c, data_type_t type, int32_t idx, const Gp &bind_variables_ptr) {
         auto shift = type_shift(type);
         auto type_size = 1 << shift;
-        return {Mem(vars_ptr, 8 * idx, type_size), type, data_kind_t::kMemory};
+        return {
+            Mem(bind_variables_ptr, 16 * idx, type_size), // size/padding part
+            Mem(bind_variables_ptr, 16 * idx + 8, type_size), // data/ptr part
+            type, data_kind_t::kMemory
+        };
     }
 
-    jit_value_t read_mem_varsize(Compiler &c,
-                                data_type_t varlen_type,
+    jit_value_t read_variable_size_mem(Compiler &c,
+                                data_type_t column_type,
                                 const Gp &column_data_address,
                                 const Gp &column_aux_address,
                                 const Gp &input_index) {
 
-        auto shift = type_shift(varlen_type); // aux part size
+        auto shift = type_shift(column_type); // aux part size
         auto type_size = 1 << shift;
         if (type_size <= 8) {
             return {
                 Mem(column_aux_address, input_index, shift, 0, type_size), // aux part
                 ptr(column_data_address),
-                varlen_type, data_kind_t::kMemory
+                column_type, data_kind_t::kMemory
             };
         } else {
             Gp offset = c.newInt64("row_offset");
@@ -59,16 +62,17 @@ namespace questdb::x86 {
             return {
                 Mem(column_aux_address, offset, 0, 0, type_size), // aux part
                 ptr(column_data_address),
-                varlen_type, data_kind_t::kMemory
+                column_type, data_kind_t::kMemory
             };
         }
     }
+
     // Reads length of variable size column with header stored in data vector (string, binary).
     jit_value_t read_mem_varsize0(Compiler &c,
                                  uint32_t header_size,
                                  int32_t column_idx,
-                                 const Gp &data_ptr,
-                                 const Gp &varsize_aux_ptr,
+                                 const Gp &column_data_ptr,
+                                 const Gp &column_aux_ptr,
                                  const Gp &input_index) {
         // Column has variable-size data with header stored in data vector.
         // First, we load this and the next data vector offsets from the aux vector.
@@ -83,7 +87,7 @@ namespace questdb::x86 {
         Gp next_input_index = c.newInt64("next_input_index");
         c.mov(next_input_index, input_index);
         c.inc(next_input_index);
-        c.mov(varsize_aux_address, ptr(varsize_aux_ptr, 8 * column_idx, 8));
+        c.mov(varsize_aux_address, ptr(column_aux_ptr, 8 * column_idx, 8));
         auto offset_shift = type_shift(data_type_t::i64);
         auto offset_size = 1 << offset_shift;
         c.mov(offset, ptr(varsize_aux_address, input_index, offset_shift, 0, offset_size));
@@ -95,7 +99,7 @@ namespace questdb::x86 {
         c.jnz(l_nonzero);
         // If it's zero, we have to load the actual header value, which can be 0 or -1.
         Gp column_address = c.newInt64("column_address");
-        c.mov(column_address, ptr(data_ptr, 8 * column_idx, 8));
+        c.mov(column_address, ptr(column_data_ptr, 8 * column_idx, 8));
         c.mov(length, ptr(column_address, offset, 0, 0, header_size));
         c.bind(l_nonzero);
         if (header_size == 4) {
@@ -135,10 +139,8 @@ namespace questdb::x86 {
         // c.mov(length, ptr(data.getBase(), offset, 0, 0, header_size));
         c.bind(l_nonzero);
         if (header_size == 4) {
-	    c.comment("return length 32");
             return {length.r32(), data_type_t::i32, data_kind_t::kMemory};
         }
-	    c.comment("return length 64");
         return {length, data_type_t::i64, data_kind_t::kMemory};
     }
 
@@ -146,14 +148,20 @@ namespace questdb::x86 {
     // This part is stored in the lowest bytes of the header
     // (see VarcharTypeDriver to understand the format).
     //
-    // Note: unlike read_mem_varsize this method doesn't return the length,
+    // Note: unlike read_variable_size_mem this method doesn't return the length,
     //       so it can only be used in NULL checks.
-    jit_value_t read_mem_varchar_header(Compiler &c,
+    jit_value_t read_mem_varchar_header(Compiler &c, jit_value_t value) {
+        Gp header = c.newInt64("column_aux_address");
+        c.mov(header, value.extra().as<Mem>());
+        return {header, data_type_t::i64, data_kind_t::kMemory};
+    }
+
+    jit_value_t read_mem_varchar_header_old(Compiler &c,
                                         int32_t column_idx,
-                                        const Gp &varsize_aux_ptr,
+                                        const Gp &column_aux_ptr,
                                         const Gp &input_index) {
         Gp varsize_aux_address = c.newInt64("varsize_aux_address");
-        c.mov(varsize_aux_address, ptr(varsize_aux_ptr, 8 * column_idx, 8));
+        c.mov(varsize_aux_address, ptr(column_aux_ptr, 8 * column_idx, 8));
 
         Gp header_offset = c.newInt64("header_offset");
         c.mov(header_offset, input_index);
@@ -166,33 +174,29 @@ namespace questdb::x86 {
         return {header, data_type_t::i64, data_kind_t::kMemory};
     }
 
-    jit_value_t read_mem(
-            Compiler &c, data_type_t type, int32_t column_idx, const Gp &data_ptr,
-            const Gp &varsize_aux_ptr, const Gp &input_index
+    jit_value_t read_column_mem(
+            Compiler &c, data_type_t column_type, int32_t column_idx, const Gp &column_data_ptr,
+            const Gp &column_aux_ptr, const Gp &input_index
     ) {
-        if (type == data_type_t::varchar_header) {
-            return read_mem_varchar_header(c, column_idx, varsize_aux_ptr, input_index);
-        }
+        Gp column_data_address = c.newInt64("column_data_address");
+        c.mov(column_data_address, ptr(column_data_ptr, 8 * column_idx, 8));
 
-        Gp column_address = c.newInt64("column_address");
-        c.mov(column_address, ptr(data_ptr, 8 * column_idx, 8));
-
-        if (is_varlen(type)) {
-            Gp varsize_aux_address = c.newInt64("varsize_aux_address");
-            c.mov(varsize_aux_address, ptr(varsize_aux_ptr, 8 * column_idx, 8));
-            return read_mem_varsize(c, type, column_address, varsize_aux_address, input_index);
+        if (is_variable_size(column_type)) {
+            Gp column_aux_address = c.newInt64("column_aux_address");
+            c.mov(column_aux_address, ptr(column_aux_ptr, 8 * column_idx, 8));
+            return read_variable_size_mem(c, column_type, column_data_address, column_aux_address, input_index);
         }
 
         // Simple case: column has fixed-length data.
-        auto shift = type_shift(type);
+        auto shift = type_shift(column_type);
         auto type_size = 1 << shift;
         if (type_size <= 8) {
-            return {Mem(column_address, input_index, shift, 0, type_size), type, data_kind_t::kMemory};
+            return {Mem(column_data_address, input_index, shift, 0, type_size), column_type, data_kind_t::kMemory};
         } else {
             Gp offset = c.newInt64("row_offset");
             c.mov(offset, input_index);
             c.sal(offset, shift);
-            return {Mem(column_address, offset, 0, 0, type_size), type, data_kind_t::kMemory};
+            return {Mem(column_data_address, offset, 0, 0, type_size), column_type, data_kind_t::kMemory};
         }
     }
 
@@ -583,15 +587,18 @@ namespace questdb::x86 {
 
     jit_value_t load_varlen_reg(Compiler &c, const jit_value_t &v) {
 	    if (v.op().isMem()) {
-		return load_length(c, v);
+            if (v.dtype() == data_type_t::varchar_header) {
+                return read_mem_varchar_header(c, v);
+            }
+            return load_length(c, v);
 	    } else if (v.op().isImm()) {
-		return imm2reg(c, v.dtype(), v);
+            return imm2reg(c, v.dtype(), v);
 	    } else {
-		return v;
+            return v;
 	    }
     }
 
-    jit_value_t cmp_eq_varlen(Compiler &c, const jit_value_t &l, const jit_value_t &r) {
+    jit_value_t variable_size_cmp_eq(Compiler &c, const jit_value_t &l, const jit_value_t &r) {
         auto lhs = load_varlen_reg(c, l);
         auto rhs = load_varlen_reg(c, r);
 
@@ -607,7 +614,7 @@ namespace questdb::x86 {
         }
     }
 
-    jit_value_t cmp_ne_varlen(Compiler &c, const jit_value_t &l, const jit_value_t &r) {
+    jit_value_t variable_size_cmp_ne(Compiler &c, const jit_value_t &l, const jit_value_t &r) {
         auto lhs = load_varlen_reg(c, l);
         auto rhs = load_varlen_reg(c, r);
         auto dt = lhs.dtype();
@@ -760,13 +767,15 @@ namespace questdb::x86 {
         auto r = values.pop();
 
         // variable size operations
-        if (is_varlen(l.dtype()) || is_varlen(r.dtype())) {
+        if (is_variable_size(l.dtype()) || is_variable_size(r.dtype())) {
             switch (instr.opcode) {
                 case opcodes::Eq:
-                    values.append(cmp_eq_varlen(c, l, r));
+                    // compare variable size type lengths/nulls for now.
+                    // TODO: introduce a new opcode for length function call
+                    values.append(variable_size_cmp_eq(c, l, r));
                     break;
                 case opcodes::Ne:
-                    values.append(cmp_ne_varlen(c, l, r));
+                    values.append(variable_size_cmp_ne(c, l, r));
                     break;
                 default:
                     __builtin_unreachable();
@@ -824,9 +833,9 @@ namespace questdb::x86 {
     void
     emit_code(Compiler &c, const instruction_t *istream, size_t size, ZoneStack<jit_value_t> &values,
               bool null_check,
-              const Gp &data_ptr,
-              const Gp &varsize_aux_ptr,
-              const Gp &vars_ptr,
+              const Gp &column_data_ptr,
+              const Gp &column_aux_ptr,
+              const Gp &bind_variables_ptr,
               const Gp &input_index) {
 
         for (size_t i = 0; i < size; ++i) {
@@ -839,13 +848,13 @@ namespace questdb::x86 {
                 case opcodes::Var: {
                     auto type = static_cast<data_type_t>(instr.options);
                     auto idx  = static_cast<int32_t>(instr.ipayload.lo);
-                    values.append(read_vars_mem(c, type, idx, vars_ptr));
+                    values.append(read_bind_variables_mem(c, type, idx, bind_variables_ptr));
                 }
                     break;
                 case opcodes::Mem: {
-                    auto type = static_cast<data_type_t>(instr.options);
-                    auto idx  = static_cast<int32_t>(instr.ipayload.lo);
-                    values.append(read_mem(c, type, idx, data_ptr, varsize_aux_ptr, input_index));
+                    auto column_type = static_cast<data_type_t>(instr.options);
+                    auto column_index  = static_cast<int32_t>(instr.ipayload.lo);
+                    values.append(read_column_mem(c, column_type, column_index, column_data_ptr, column_aux_ptr, input_index));
                 }
                     break;
                 case opcodes::Imm:

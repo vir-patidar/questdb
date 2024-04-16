@@ -38,7 +38,7 @@ public class VarcharBindVariable extends VarcharFunction implements ScalarFuncti
     private final int floatScale;
     // we should use the "direct" version of the sink
     // because bind variable is reused to pass variable-sized constants to the native JIT code.
-    private final DirectUtf8Sink utf8Sink = new DirectUtf8Sink(16);
+    private final Utf8StringSink utf8Sink = new Utf8StringSink(16);
     private boolean isNull = true;
 
     public VarcharBindVariable(int floatScale) {

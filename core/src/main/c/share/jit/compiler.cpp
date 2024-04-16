@@ -286,7 +286,7 @@ Java_io_questdb_jit_FiltersCompiler_compileFunction(JNIEnv *e,
     CodeHolder code;
     code.init(gGlobalContext.rt.environment());
     FileLogger logger(stdout);
-    bool debug = true;//options & 1;
+    bool debug = options & 1;
     if (debug) {
         logger.addFlags(FormatOptions::kFlagRegCasts |
                         FormatOptions::kFlagExplainImms |

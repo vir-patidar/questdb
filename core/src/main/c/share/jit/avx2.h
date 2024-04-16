@@ -61,8 +61,8 @@ namespace questdb::avx2 {
     }
 
     jit_value_t
-    read_vars_mem(Compiler &c, data_type_t type, int32_t idx, const Gp &vars_ptr) {
-        auto value = x86::read_vars_mem(c, type, idx, vars_ptr);
+    read_bind_variables_mem(Compiler &c, data_type_t type, int32_t idx, const Gp &vars_ptr) {
+        auto value = x86::read_bind_variables_mem(c, type, idx, vars_ptr);
         Mem mem = value.op().as<Mem>();
         Ymm val = c.newYmm();
         switch (type) {
@@ -106,7 +106,7 @@ namespace questdb::avx2 {
     }
 
     // Reads length of variable size column with header stored in data vector (string, binary).
-    jit_value_t read_mem_varsize(Compiler &c,
+    jit_value_t read_variable_size_mem(Compiler &c,
                                  uint32_t header_size,
                                  int32_t column_idx,
                                  const Gp &data_ptr,
@@ -212,7 +212,7 @@ namespace questdb::avx2 {
     // This part is stored in the lowest bytes of the header
     // (see VarcharTypeDriver to understand the format).
     //
-    // Note: unlike read_mem_varsize this method doesn't return the length,
+    // Note: unlike read_variable_size_mem this method doesn't return the length,
     //       so it can only be used in NULL checks.
     jit_value_t read_mem_varchar_header(Compiler &c,
                                         int32_t column_idx,
@@ -245,7 +245,7 @@ namespace questdb::avx2 {
     }
 
     jit_value_t
-    read_mem(Compiler &c, data_type_t type, int32_t column_idx, const Gp &data_ptr, const Gp &varsize_aux_ptr, const Gp &input_index) {
+    read_column_mem(Compiler &c, data_type_t type, int32_t column_idx, const Gp &data_ptr, const Gp &varsize_aux_ptr, const Gp &input_index) {
         if (type == data_type_t::varchar_header) {
             return read_mem_varchar_header(c, column_idx, varsize_aux_ptr, input_index);
         }
@@ -262,7 +262,7 @@ namespace questdb::avx2 {
                 header_size = 0;
         }
         if (header_size != 0) {
-            return read_mem_varsize(c, header_size, column_idx, data_ptr, varsize_aux_ptr, input_index);
+            return read_variable_size_mem(c, header_size, column_idx, data_ptr, varsize_aux_ptr, input_index);
         }
 
         // Simple case: a fixed-width column
@@ -563,13 +563,13 @@ namespace questdb::avx2 {
                 case opcodes::Var: {
                     auto type = static_cast<data_type_t>(instr.options);
                     auto idx = static_cast<int32_t>(instr.ipayload.lo);
-                    values.append(read_vars_mem(c, type, idx, vars_ptr));
+                    values.append(read_bind_variables_mem(c, type, idx, vars_ptr));
                 }
                     break;
                 case opcodes::Mem: {
                     auto type = static_cast<data_type_t>(instr.options);
                     auto idx = static_cast<int32_t>(instr.ipayload.lo);
-                    values.append(read_mem(c, type, idx, data_ptr, varsize_aux_ptr, input_index));
+                    values.append(read_column_mem(c, type, idx, data_ptr, varsize_aux_ptr, input_index));
                 }
                     break;
                 case opcodes::Imm:

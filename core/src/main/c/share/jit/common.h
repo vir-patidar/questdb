@@ -121,13 +121,14 @@ private:
     data_kind_t kind_;
 };
 
-inline bool is_varlen(data_type_t type) {
+inline bool is_variable_size(data_type_t type) {
     switch (type) {
-	case data_type_t::string_header:
+        case data_type_t::string_header:
         case data_type_t::binary_header:
+        case data_type_t::varchar_header:
             return true;
         default:
-	    return false;
+            return false;
     }
 }
 
@@ -139,12 +140,14 @@ inline uint32_t type_shift(data_type_t type) {
             return 1;
         case data_type_t::i32:
         case data_type_t::f32:
+            return 2;
         case data_type_t::i64:
         case data_type_t::f64:
-	case data_type_t::string_header:
+        case data_type_t::string_header:
         case data_type_t::binary_header:
             return 3;
         case data_type_t::i128:
+        case data_type_t::varchar_header:
             return 4;
         default:
             __builtin_unreachable();

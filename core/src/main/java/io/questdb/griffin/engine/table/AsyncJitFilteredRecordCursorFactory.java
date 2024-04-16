@@ -397,8 +397,11 @@ public class AsyncJitFilteredRecordCursorFactory extends AbstractRecordCursorFac
                     bindVarMemory.putLong(appendOffset, -1);
                     return;
                 }
-                bindVarMemory.putLong(utf8.ptr());
-                bindVarMemory.putLong(appendOffset, utf8.size()); // overwrite padding with size
+                final int size = utf8.size();
+                final long ptr = Unsafe.malloc(size, MemoryTag.NATIVE_DEFAULT);
+                utf8.writeTo(ptr, 0, size);
+                bindVarMemory.putLong(ptr);
+                bindVarMemory.putLong(appendOffset, size); // overwrite padding with size
                 return;
             default:
                 throw SqlException.position(0).put("unsupported bind variable type: ").put(ColumnType.nameOf(columnTypeTag));
@@ -412,6 +415,16 @@ public class AsyncJitFilteredRecordCursorFactory extends AbstractRecordCursorFac
         halfClose();
         Misc.free(compiledFilter);
         Misc.free(filter);
+        for (int i = 0, n = bindVarFunctions.size(); i < n; i++) {
+            final Function function = bindVarFunctions.getQuick(i);
+            final int columnType = function.getType();
+            final int columnTypeTag = ColumnType.tagOf(columnType);
+            if ( columnTypeTag == ColumnType.VARCHAR) {
+                final long ptr = bindVarMemory.getLong(16 * i + Long.BYTES);
+                final int size = (int)bindVarMemory.getLong(16 * i);
+                Unsafe.free(ptr, size, MemoryTag.NATIVE_DEFAULT);
+            }
+        }
         Misc.free(bindVarMemory);
         Misc.freeObjList(bindVarFunctions);
     }
