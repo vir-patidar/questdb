@@ -1363,6 +1363,16 @@ public class SqlKeywords {
                 && (tok.charAt(4) | 32) == 'e';
     }
 
+    public static boolean isRemoteKeyword(CharSequence tok) {
+        return tok.length() == 6
+                && (tok.charAt(0) | 32) == 'r'
+                && (tok.charAt(1) | 32) == 'e'
+                && (tok.charAt(2) | 32) == 'm'
+                && (tok.charAt(3) | 32) == 'o'
+                && (tok.charAt(4) | 32) == 't'
+                && (tok.charAt(5) | 32) == 'e';
+    }
+
     public static boolean isRenameKeyword(CharSequence tok) {
         return tok.length() == 6
                 && (tok.charAt(0) | 32) == 'r'

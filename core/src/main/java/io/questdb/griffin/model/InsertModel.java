@@ -38,6 +38,7 @@ public class InsertModel implements ExecutionModel, Mutable, Sinkable {
     private final IntList endOfRowTupleValuesPositions = new IntList();
     private final ObjList<ObjList<ExpressionNode>> rowTupleValues = new ObjList<>();
     private long batchSize = -1;
+    private String clientConfString;
     private long o3MaxLag = 0;
     private QueryModel queryModel;
     private int selectKeywordPosition;
@@ -81,10 +82,15 @@ public class InsertModel implements ExecutionModel, Mutable, Sinkable {
         this.endOfRowTupleValuesPositions.clear();
         this.batchSize = -1;
         this.o3MaxLag = 0;
+        this.clientConfString = null;
     }
 
     public long getBatchSize() {
         return batchSize;
+    }
+
+    public String getClientConfString() {
+        return clientConfString;
     }
 
     public ObjList<CharSequence> getColumnNameList() {
@@ -136,6 +142,10 @@ public class InsertModel implements ExecutionModel, Mutable, Sinkable {
 
     public void setBatchSize(long batchSize) {
         this.batchSize = batchSize;
+    }
+
+    public void setClientConfString(CharSequence clientConfString) {
+        this.clientConfString = Chars.toString(clientConfString);
     }
 
     public void setO3MaxLag(long o3MaxLag) {

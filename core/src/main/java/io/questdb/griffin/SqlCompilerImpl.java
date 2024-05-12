@@ -32,6 +32,7 @@ import io.questdb.cairo.vm.Vm;
 import io.questdb.cairo.vm.api.MemoryMARW;
 import io.questdb.cairo.wal.WalUtils;
 import io.questdb.cairo.wal.WalWriterMetadata;
+import io.questdb.client.Sender;
 import io.questdb.griffin.engine.RegisteredRecordCursorFactory;
 import io.questdb.griffin.engine.ops.*;
 import io.questdb.griffin.model.*;
@@ -43,15 +44,13 @@ import io.questdb.network.PeerIsSlowToReadException;
 import io.questdb.network.QueryPausedException;
 import io.questdb.std.*;
 import io.questdb.std.datetime.DateFormat;
-import io.questdb.std.str.Path;
-import io.questdb.std.str.Sinkable;
-import io.questdb.std.str.StringSink;
-import io.questdb.std.str.Utf8s;
+import io.questdb.std.str.*;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.TestOnly;
 
 import java.io.Closeable;
+import java.time.temporal.ChronoUnit;
 
 import static io.questdb.cairo.TableUtils.COLUMN_NAME_TXN_NONE;
 import static io.questdb.griffin.SqlKeywords.*;
@@ -107,6 +106,7 @@ public class SqlCompilerImpl implements SqlCompiler, Closeable, SqlParserCallbac
     private final VacuumColumnVersions vacuumColumnVersions;
     protected CharSequence query;
     private final ExecutableMethod insertAsSelectMethod = this::insertAsSelect;
+    private final ExecutableMethod remoteInsertAsSelectMethod = this::remoteInsertAsSelect;
     protected boolean queryContainsSecret;
     protected int queryFd;
     protected boolean queryLogged;
@@ -1515,15 +1515,20 @@ public class SqlCompilerImpl implements SqlCompiler, Closeable, SqlParserCallbac
                     break;
                 default:
                     final InsertModel insertModel = (InsertModel) executionModel;
+                    String clientConfString = insertModel.getClientConfString();
                     if (insertModel.getQueryModel() != null) {
                         queryId = queryRegistry.register(query, executionContext);
+                        ExecutableMethod method = clientConfString == null ? insertAsSelectMethod : remoteInsertAsSelectMethod;
                         executeWithRetries(
-                                insertAsSelectMethod,
+                                method,
                                 executionModel,
                                 configuration.getCreateAsSelectRetryCount(),
                                 executionContext
                         );
                     } else {
+                        if (clientConfString != null) {
+                            throw SqlException.$(queryStart, "remote INSERT require a SELECT statement, inserting values directly is not supported");
+                        }
                         insert(executionModel, executionContext);
                         compiledQuery.getInsertOperation().setInsertSql(query);
                     }
@@ -2589,6 +2594,104 @@ public class SqlCompilerImpl implements SqlCompiler, Closeable, SqlParserCallbac
             indexBuilder.reindex(partition, columnName);
         }
         compiledQuery.ofRepair();
+    }
+
+    private void remoteInsertAsSelect(ExecutionModel executionModel, SqlExecutionContext executionContext) throws SqlException {
+        final InsertModel model = (InsertModel) executionModel;
+        final ExpressionNode tableNameExpr = model.getTableNameExpr();
+
+        long insertCount = 0;
+
+        executionContext.setUseSimpleCircuitBreaker(true);
+        String clientConfString = model.getClientConfString();
+
+        //todo: validate table metadata
+        //todo: generate a specialized sender for a given metadata
+        try (
+                Sender sender = Sender.fromConfig(clientConfString);
+                RecordCursorFactory factory = generate(model.getQueryModel(), executionContext)
+        ) {
+            final RecordMetadata cursorMetadata = factory.getMetadata();
+            int columnCount = cursorMetadata.getColumnCount();
+            int timestampIndex = cursorMetadata.getTimestampIndex();
+
+            SqlExecutionCircuitBreaker circuitBreaker = executionContext.getCircuitBreaker();
+            StringSink sink = new StringSink();
+            try (RecordCursor cursor = factory.getCursor(executionContext)) {
+                Record record = cursor.getRecord();
+                while (cursor.hasNext()) {
+                    sender.table(tableNameExpr.token);
+                    circuitBreaker.statefulThrowExceptionIfTripped();
+                    for (int i = 0; i < columnCount; i++) {
+                        if (i != timestampIndex) {
+                            int columnType = cursorMetadata.getColumnType(i);
+                            String columnName = cursorMetadata.getColumnName(i);
+                            switch (columnType) {
+                                case ColumnType.STRING:
+                                    sender.stringColumn(columnName, record.getStrA(i));
+                                    break;
+                                case ColumnType.LONG:
+                                    sender.longColumn(columnName, record.getLong(i));
+                                    break;
+                                case ColumnType.INT:
+                                    sender.longColumn(columnName, record.getInt(i));
+                                    break;
+                                case ColumnType.SHORT:
+                                    sender.longColumn(columnName, record.getShort(i));
+                                    break;
+                                case ColumnType.BYTE:
+                                    sender.longColumn(columnName, record.getByte(i));
+                                    break;
+                                case ColumnType.DOUBLE:
+                                    sender.doubleColumn(columnName, record.getDouble(i));
+                                    break;
+                                case ColumnType.FLOAT:
+                                    sender.doubleColumn(columnName, record.getFloat(i));
+                                    break;
+                                case ColumnType.BOOLEAN:
+                                    sender.boolColumn(columnName, record.getBool(i));
+                                    break;
+                                case ColumnType.SYMBOL:
+                                    // todo: send symbols as actual symbols instead of strings
+                                    sender.stringColumn(columnName, record.getSymA(i));
+                                    break;
+                                case ColumnType.BINARY:
+                                    throw SqlException.$(0, "binary column type is not supported for remote insert");
+                                case ColumnType.DATE:
+                                    sender.timestampColumn(columnName, record.getTimestamp(i), ChronoUnit.MILLIS);
+                                    break;
+                                case ColumnType.TIMESTAMP:
+                                    sender.timestampColumn(columnName, record.getTimestamp(i), ChronoUnit.MICROS);
+                                    break;
+                                case ColumnType.LONG256:
+                                    throw SqlException.$(0, "long256 column type is not supported for remote insert");
+                                case ColumnType.VARCHAR:
+                                    Utf8Sequence varcharA = record.getVarcharA(i);
+                                    if (varcharA != null) {
+                                        sink.clear();
+                                        sink.put(varcharA);
+                                        sender.stringColumn(columnName, sink);
+                                    }
+                                    break;
+                                default:
+                                    throw SqlException.$(0, "unsupported column type: ").put(ColumnType.nameOf(columnType));
+                            }
+                        }
+                    }
+                    if (timestampIndex != -1) {
+                        long ts = record.getTimestamp(timestampIndex);
+                        sender.at(ts, ChronoUnit.MICROS);
+                    } else {
+                        sender.atNow();
+                    }
+                    insertCount++;
+                }
+            }
+        } finally {
+            executionContext.setUseSimpleCircuitBreaker(false);
+        }
+
+        compiledQuery.ofInsertAsSelect(insertCount);
     }
 
     private void snapshotDatabase(SqlExecutionContext executionContext) throws SqlException {

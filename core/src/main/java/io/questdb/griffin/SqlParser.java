@@ -1576,14 +1576,26 @@ public class SqlParser {
 
     private ExecutionModel parseInsert(GenericLexer lexer, SqlParserCallback sqlParserCallback) throws SqlException {
         final InsertModel model = insertModelPool.next();
-        CharSequence tok = tok(lexer, "atomic or into or batch");
+        CharSequence tok = tok(lexer, "atomic or into or batch or remote");
         model.setBatchSize(configuration.getInsertModelBatchSize());
         boolean atomicSpecified = false;
+
+        if (SqlKeywords.isRemoteKeyword(tok)) {
+            expectTok(lexer, '(');
+            tok = tok(lexer, "client configuration string");
+            if (!Chars.isQuoted(tok)) {
+                throw SqlException.$(lexer.lastTokenPosition(), "client configuration string must be quoted");
+            }
+            tok = GenericLexer.unquote(tok);
+            model.setClientConfString(tok);
+            expectTok(lexer, ')');
+            tok = tok(lexer, "into or batch or atomic");
+        }
 
         if (SqlKeywords.isAtomicKeyword(tok)) {
             atomicSpecified = true;
             model.setBatchSize(-1);
-            tok = tok(lexer, "into");
+            tok = tok(lexer, "into or batch");
         }
 
         if (SqlKeywords.isBatchKeyword(tok)) {
