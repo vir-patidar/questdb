@@ -2615,6 +2615,20 @@ public class SqlCompilerImpl implements SqlCompiler, Closeable, SqlParserCallbac
             int columnCount = cursorMetadata.getColumnCount();
             int timestampIndex = cursorMetadata.getTimestampIndex();
 
+            int symCnt = 0;
+            for (int i = 0; i < columnCount; i++) {
+                if (ColumnType.isSymbol(cursorMetadata.getColumnType(i))) {
+                    symCnt++;
+                }
+            }
+            int[] symIndexes = new int[symCnt];
+            for (int i = 0, curIndex = 0; i < columnCount; i++) {
+                if (ColumnType.isSymbol(cursorMetadata.getColumnType(i))) {
+                    symIndexes[curIndex++] = i;
+                }
+            }
+
+
             SqlExecutionCircuitBreaker circuitBreaker = executionContext.getCircuitBreaker();
             StringSink sink = new StringSink();
             try (RecordCursor cursor = factory.getCursor(executionContext)) {
@@ -2622,60 +2636,65 @@ public class SqlCompilerImpl implements SqlCompiler, Closeable, SqlParserCallbac
                 while (cursor.hasNext()) {
                     sender.table(tableNameExpr.token);
                     circuitBreaker.statefulThrowExceptionIfTripped();
+
+                    // symbols first
+                    for (int i = 0; i < symCnt; i++) {
+                        int symIdx = symIndexes[i];
+                        String columnName = cursorMetadata.getColumnName(symIdx);
+                        sender.symbol(columnName, record.getSymA(symIdx));
+                    }
+
+                    // then all other columns
                     for (int i = 0; i < columnCount; i++) {
-                        if (i != timestampIndex) {
-                            int columnType = cursorMetadata.getColumnType(i);
-                            String columnName = cursorMetadata.getColumnName(i);
-                            switch (columnType) {
-                                case ColumnType.STRING:
-                                    sender.stringColumn(columnName, record.getStrA(i));
-                                    break;
-                                case ColumnType.LONG:
-                                    sender.longColumn(columnName, record.getLong(i));
-                                    break;
-                                case ColumnType.INT:
-                                    sender.longColumn(columnName, record.getInt(i));
-                                    break;
-                                case ColumnType.SHORT:
-                                    sender.longColumn(columnName, record.getShort(i));
-                                    break;
-                                case ColumnType.BYTE:
-                                    sender.longColumn(columnName, record.getByte(i));
-                                    break;
-                                case ColumnType.DOUBLE:
-                                    sender.doubleColumn(columnName, record.getDouble(i));
-                                    break;
-                                case ColumnType.FLOAT:
-                                    sender.doubleColumn(columnName, record.getFloat(i));
-                                    break;
-                                case ColumnType.BOOLEAN:
-                                    sender.boolColumn(columnName, record.getBool(i));
-                                    break;
-                                case ColumnType.SYMBOL:
-                                    // todo: send symbols as actual symbols instead of strings
-                                    sender.stringColumn(columnName, record.getSymA(i));
-                                    break;
-                                case ColumnType.BINARY:
-                                    throw SqlException.$(0, "binary column type is not supported for remote insert");
-                                case ColumnType.DATE:
-                                    sender.timestampColumn(columnName, record.getTimestamp(i), ChronoUnit.MILLIS);
-                                    break;
-                                case ColumnType.TIMESTAMP:
-                                    sender.timestampColumn(columnName, record.getTimestamp(i), ChronoUnit.MICROS);
-                                    break;
-                                case ColumnType.LONG256:
-                                    throw SqlException.$(0, "long256 column type is not supported for remote insert");
-                                case ColumnType.VARCHAR:
-                                    Utf8Sequence varcharA = record.getVarcharA(i);
-                                    if (varcharA != null) {
-                                        sink.clear();
-                                        sink.put(varcharA);
-                                        sender.stringColumn(columnName, sink);
-                                    }
-                                    break;
-                                default:
-                                    throw SqlException.$(0, "unsupported column type: ").put(ColumnType.nameOf(columnType));
-                            }
+                        if (i == timestampIndex) {
+                            continue;
+                        }
+                        int columnType = cursorMetadata.getColumnType(i);
+                        String columnName = cursorMetadata.getColumnName(i);
+                        switch (columnType) {
+                            case ColumnType.STRING:
+                                sender.stringColumn(columnName, record.getStrA(i));
+                                break;
+                            case ColumnType.LONG:
+                                sender.longColumn(columnName, record.getLong(i));
+                                break;
+                            case ColumnType.INT:
+                                sender.longColumn(columnName, record.getInt(i));
+                                break;
+                            case ColumnType.SHORT:
+                                sender.longColumn(columnName, record.getShort(i));
+                                break;
+                            case ColumnType.BYTE:
+                                sender.longColumn(columnName, record.getByte(i));
+                                break;
+                            case ColumnType.DOUBLE:
+                                sender.doubleColumn(columnName, record.getDouble(i));
+                                break;
+                            case ColumnType.FLOAT:
+                                sender.doubleColumn(columnName, record.getFloat(i));
+                                break;
+                            case ColumnType.BOOLEAN:
+                                sender.boolColumn(columnName, record.getBool(i));
+                                break;
+                            case ColumnType.DATE:
+                                sender.timestampColumn(columnName, record.getTimestamp(i), ChronoUnit.MILLIS);
+                                break;
+                            case ColumnType.TIMESTAMP:
+                                sender.timestampColumn(columnName, record.getTimestamp(i), ChronoUnit.MICROS);
+                                break;
+                            case ColumnType.VARCHAR:
+                                Utf8Sequence varcharA = record.getVarcharA(i);
+                                if (varcharA != null) {
+                                    sink.clear();
+                                    sink.put(varcharA);
+                                    sender.stringColumn(columnName, sink);
+                                }
+                                break;
+                            case ColumnType.SYMBOL:
+                                // symbols are already processed
+                                break;
+                            default:
+                                throw SqlException.$(0, "unsupported column type: ").put(ColumnType.nameOf(columnType));
                         }
                     }
                     if (timestampIndex != -1) {
@@ -2686,6 +2705,7 @@ public class SqlCompilerImpl implements SqlCompiler, Closeable, SqlParserCallbac
                     }
                     insertCount++;
                 }
+                sender.flush();
             }
         } finally {
             executionContext.setUseSimpleCircuitBreaker(false);
