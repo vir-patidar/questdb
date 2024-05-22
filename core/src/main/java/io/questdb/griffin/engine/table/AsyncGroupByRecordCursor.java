@@ -266,9 +266,11 @@ class AsyncGroupByRecordCursor implements RecordCursor {
                 long cursor = pubSeq.next();
                 if (cursor < 0) {
                     circuitBreaker.statefulThrowExceptionIfTrippedNoThrottle();
+                    LOG.debugW().$("Merge shard queue full, merging shard [shard=").$(i).I$();
                     atom.mergeShard(-1, i);
                     ownCount++;
                 } else {
+                    LOG.debugW().$("Queuing merge shard [shard=").$(i).I$();
                     queue.get(cursor).of(sharedCircuitBreaker, doneLatch, atom, i);
                     pubSeq.done(cursor);
                     queuedCount++;
