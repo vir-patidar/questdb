@@ -249,6 +249,9 @@ class AsyncGroupByRecordCursor implements RecordCursor {
 
         // Next, merge each set of partial shard maps into the final shard map. This is done in parallel.
         final int shardCount = atom.getShardCount();
+        LOG.debug().$("merge shards [shardCount=").$(shardCount).I$();
+        long start = System.nanoTime();
+
         final RingQueue<GroupByMergeShardTask> queue = messageBus.getGroupByMergeShardQueue();
         final MPSequence pubSeq = messageBus.getGroupByMergeShardPubSeq();
         final MCSequence subSeq = messageBus.getGroupByMergeShardSubSeq();
@@ -301,10 +304,12 @@ class AsyncGroupByRecordCursor implements RecordCursor {
             throwTimeoutException();
         }
 
+        long durationMs = (System.nanoTime() - start) / 1_000_000;
         LOG.debug().$("merge shards done [total=").$(total)
                 .$(", ownCount=").$(ownCount)
                 .$(", reclaimed=").$(reclaimed)
-                .$(", queuedCount=").$(queuedCount).I$();
+                .$(", queuedCount=").$(queuedCount)
+                .$(", durationMs=").$(durationMs).I$();
 
         return atom.getDestShards();
     }
