@@ -1142,7 +1142,7 @@ public class QueryModel implements Mutable, ExecutionModel, AliasTranslator, Sin
         aliasToColumnMap.remove(columnAlias);
         aliasToColumnNameMap.remove(columnAlias);
         columnAliasIndexes.remove(columnAlias);
-        updateColumnAliasIndexes();
+        //updateColumnAliasIndexes();
     }
 
     public void removeDependency(int index) {
@@ -1293,16 +1293,16 @@ public class QueryModel implements Mutable, ExecutionModel, AliasTranslator, Sin
         this.showKind = showKind;
     }
 
-    public void setTableNameFunction(RecordCursorFactory function) {
-        this.tableNameFunction = function;
-    }
-
     public void setTableId(int id) {
         this.tableId = id;
     }
 
     public void setTableNameExpr(ExpressionNode tableNameExpr) {
         this.tableNameExpr = tableNameExpr;
+    }
+
+    public void setTableNameFunction(RecordCursorFactory function) {
+        this.tableNameFunction = function;
     }
 
     public void setTimestamp(ExpressionNode timestamp) {

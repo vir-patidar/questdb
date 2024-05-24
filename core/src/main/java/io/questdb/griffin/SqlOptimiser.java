@@ -5475,7 +5475,7 @@ public class SqlOptimiser implements Mutable {
 
             if (anyCandidates) {
 
-                for (int i = nestedColumns.size() - 1; i > 0; i--) {
+                for (int i = 0, n = nestedColumns.size(); i < n; i++) {
                     final QueryColumn nestedColumn = nestedColumns.getQuick(i);
                     final ExpressionNode nestedAst = nestedColumn.getAst();
 
@@ -5501,6 +5501,8 @@ public class SqlOptimiser implements Mutable {
 
                                 final int nestedColumnIndex = nestedModel.getColumnAliasIndex(nestedColumn.getAlias());
                                 nestedModel.removeColumn(nestedColumnIndex);
+                                i--;
+                                n--;
                             }
                         }
                     }
