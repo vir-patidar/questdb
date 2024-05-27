@@ -55,7 +55,7 @@ public class TxReader implements Closeable, Mutable {
     // have meaning (in future). For instance the table reader uses
     // a negative size value to mean that the partition is not open.
     protected static final int PARTITION_TS_OFFSET = 0;
-    protected final LongList attachedPartitions = new LongList();
+    protected final SnapshottableLongList attachedPartitions = new SnapshottableLongList();
     protected final FilesFacade ff;
     private final IntList symbolCountSnapshot = new IntList();
     protected int attachedPartitionsSize = 0;
@@ -242,16 +242,12 @@ public class TxReader implements Closeable, Mutable {
         return partitionCeilMethod.ceil(timestamp);
     }
 
-    public long getPartitionFlags(int partitionIndex) {
-        return getPartitionFlagsByIndex(partitionIndex * LONGS_PER_TX_ATTACHED_PARTITION);
-    }
-
-    private long getPartitionFlagsByIndex(int partitionRawIndex) {
-        return attachedPartitions.getQuick(partitionRawIndex + PARTITION_FLAGS_OFFSET);
-    }
-
     public int getPartitionCount() {
         return attachedPartitions.size() / LONGS_PER_TX_ATTACHED_PARTITION;
+    }
+
+    public long getPartitionFlags(int partitionIndex) {
+        return getPartitionFlagsByIndex(partitionIndex * LONGS_PER_TX_ATTACHED_PARTITION);
     }
 
     public int getPartitionIndex(long ts) {
@@ -485,6 +481,10 @@ public class TxReader implements Closeable, Mutable {
     private long getLong(long readOffset) {
         assert readOffset + Long.BYTES <= size : "offset " + readOffset + ", size " + size + ", txn=" + txn;
         return roTxMemBase.getLong(baseOffset + readOffset);
+    }
+
+    private long getPartitionFlagsByIndex(int partitionRawIndex) {
+        return attachedPartitions.getQuick(partitionRawIndex + PARTITION_FLAGS_OFFSET);
     }
 
     private long getPartitionFloor(long timestamp) {
