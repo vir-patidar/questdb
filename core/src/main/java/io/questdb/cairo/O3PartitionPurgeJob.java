@@ -24,6 +24,8 @@
 
 package io.questdb.cairo;
 
+import io.questdb.cairo.pool.AbstractMultiTenantPool;
+import io.questdb.cairo.pool.ReaderPool;
 import io.questdb.cairo.sql.TableReferenceOutOfDateException;
 import io.questdb.cairo.wal.WalUtils;
 import io.questdb.log.Log;
@@ -233,6 +235,23 @@ public class O3PartitionPurgeJob extends AbstractQueueConsumerJob<O3PartitionPur
         LOG.info().$("processed [table=").$(tableToken).I$();
     }
 
+    private boolean namedTxnInvisibleToReaders(String tableName, long partitionTimestamp, long nameTxn) {
+        AbstractMultiTenantPool.Entry<ReaderPool.R> rEntry = engine.getReaderPoolEntries().get(tableName);
+        while (rEntry != null) {
+            for (int i = 0; i < ReaderPool.ENTRY_SIZE; i++) {
+                ReaderPool.R tenant = rEntry.getTenant(i);
+                if (tenant == null) {
+                    continue;
+                }
+                if (tenant.isTxnVisible(partitionTimestamp, nameTxn)) {
+                    return false;
+                }
+            }
+            rEntry = rEntry.getNext();
+        }
+        return true;
+    }
+
     private void processDetachedPartition(
             TableToken tableToken,
             FilesFacade ff,
@@ -337,6 +356,7 @@ public class O3PartitionPurgeJob extends AbstractQueueConsumerJob<O3PartitionPur
             // lo points to the beginning element in partitionList, hi next after last
             // each partition folder represented by a pair in the partitionList (partition version, partition timestamp)
             // Skip first pair, start from second and check if it can be deleted.
+            String tableName = tableToken.getTableName();
             for (int i = lo + 2; i < hi; i += 2) {
                 long nextNameVersion = Math.min(lastCommittedPartitionName + 1, partitionList.get(i));
                 long previousNameVersion = partitionList.get(i - 2);
@@ -344,18 +364,21 @@ public class O3PartitionPurgeJob extends AbstractQueueConsumerJob<O3PartitionPur
                 boolean rangeUnlocked = previousNameVersion < nextNameVersion
                         && txnScoreboard.isRangeAvailable(previousNameVersion, nextNameVersion);
 
-                path.trimTo(tableRootLen);
-                TableUtils.setPathForPartition(path, partitionBy, partitionTimestamp, previousNameVersion - 1);
-                path.$();
+                long nameTxnDeleteCandidate = previousNameVersion - 1;
+                if (namedTxnInvisibleToReaders(tableName, partitionTimestamp, nameTxnDeleteCandidate)) {
+                    path.trimTo(tableRootLen);
+                    TableUtils.setPathForPartition(path, partitionBy, partitionTimestamp, nameTxnDeleteCandidate);
+                    path.$();
 
-                if (rangeUnlocked) {
-                    // previousNameVersion can be deleted
-                    // -1 here is to compensate +1 added when partition version parsed from folder name
-                    // See comments of why +1 added there in parsePartitionDateVersion()
-                    LOG.info().$("purging overwritten partition directory [path=").$(path).I$();
-                    purgePartition(tableToken, ff, path, "purging overwritten partition directory [path=");
-                } else {
-                    LOG.info().$("cannot purge overwritten partition directory, locked for reading [path=").$(path).I$();
+                    if (rangeUnlocked) {
+                        // previousNameVersion can be deleted
+                        // -1 here is to compensate +1 added when partition version parsed from folder name
+                        // See comments of why +1 added there in parsePartitionDateVersion()
+                        LOG.info().$("purging overwritten partition directory [path=").$(path).I$();
+                        purgePartition(tableToken, ff, path, "purging overwritten partition directory [path=");
+                    } else {
+                        LOG.info().$("cannot purge overwritten partition directory, locked for reading [path=").$(path).I$();
+                    }
                 }
             }
         }
