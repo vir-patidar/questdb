@@ -91,16 +91,20 @@ public final class SingleWriterStampedSpinLock {
      * exclusive access to the write lock. User must call {@link #writeUnlock()} to release the write lock.
      */
     public void writeLock() {
-        assert writeLockAvailable(stamp) : "write lock already held";
-        stamp++;
+        long currentStamp = this.stamp;
+        assert writeLockAvailable(currentStamp) : "write lock already held";
+        currentStamp++;
+        stamp = currentStamp;
     }
 
     /**
      * Releases the write lock. Users must ensure that the write lock is held before calling this method.
      */
     public void writeUnlock() {
-        assert !writeLockAvailable(stamp) : "write lock not held";
-        stamp++;
+        long currentStamp = this.stamp;
+        assert !writeLockAvailable(currentStamp) : "write lock not held";
+        currentStamp++;
+        stamp = currentStamp;
     }
 
     private static boolean writeLockAvailable(long stamp) {

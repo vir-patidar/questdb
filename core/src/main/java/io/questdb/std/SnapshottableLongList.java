@@ -29,134 +29,37 @@ import io.questdb.std.str.CharSink;
 import io.questdb.std.str.Sinkable;
 import io.questdb.std.str.Utf16Sink;
 import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.TestOnly;
-
-import java.util.Arrays;
 
 public class SnapshottableLongList implements Mutable, LongVec, Sinkable {
     private static final int DEFAULT_ARRAY_SIZE = 16;
     private static final long DEFAULT_NO_ENTRY_VALUE = -1L;
-    private final int initialCapacity;
+    private final SingleWriterStampedSpinLock lock = new SingleWriterStampedSpinLock();
     private final long noEntryValue;
     private long[] data;
+    private long lastSnapshotStamp = -1;
     private int pos = 0;
-
-    public SnapshottableLongList(long[] other) {
-        this.initialCapacity = other.length;
-        this.data = new long[initialCapacity];
-        setPos(other.length);
-        System.arraycopy(other, 0, this.data, 0, pos);
-        this.noEntryValue = DEFAULT_NO_ENTRY_VALUE;
-    }
+    private SnapshottableLongList snapshot;
 
     public SnapshottableLongList(int capacity) {
         this(capacity, DEFAULT_NO_ENTRY_VALUE);
     }
 
     public SnapshottableLongList(int capacity, long noEntryValue) {
-        this.initialCapacity = capacity;
         this.data = new long[capacity];
         this.noEntryValue = noEntryValue;
-    }
-
-    public SnapshottableLongList(SnapshottableLongList other) {
-        this.initialCapacity = Math.max(other.size(), DEFAULT_ARRAY_SIZE);
-        this.data = new long[initialCapacity];
-        setPos(other.size());
-        System.arraycopy(other.data, 0, this.data, 0, pos);
-        this.noEntryValue = other.noEntryValue;
     }
 
     public SnapshottableLongList() {
         this(DEFAULT_ARRAY_SIZE);
     }
 
-    public void add(long value) {
-        checkCapacity(pos + 1);
-        data[pos++] = value;
-    }
-
-    public void add(long value0, long value1) {
-        int n = pos;
-        checkCapacity(n + 2);
-        data[n++] = value0;
-        data[n++] = value1;
-        pos = n;
-    }
-
-    public void add(long value0, long value1, long value2, long value3) {
-        int n = pos;
-        checkCapacity(n + 4);
-        data[n++] = value0;
-        data[n++] = value1;
-        data[n++] = value2;
-        data[n++] = value3;
-        pos = n;
-    }
-
-    public void add(long value0, long value1, long value2, long value3, long value4, long value5, long value6, long value7) {
-        int n = pos;
-        checkCapacity(n + 8);
-        data[n++] = value0;
-        data[n++] = value1;
-        data[n++] = value2;
-        data[n++] = value3;
-        data[n++] = value4;
-        data[n++] = value5;
-        data[n++] = value6;
-        data[n++] = value7;
-        pos = n;
-    }
-
-    public void add(SnapshottableLongList that) {
-        add(that, 0, that.size());
-    }
-
-    public void add(SnapshottableLongList that, int lo, int hi) {
-        int p = pos;
-        int s = hi - lo;
-        checkCapacity(p + s);
-        System.arraycopy(that.data, lo, this.data, p, s);
-        pos += s;
-    }
-
-    public void add(int index, long element) {
-        checkCapacity(++pos);
-        System.arraycopy(data, index, data, index + 1, pos - index - 1);
-        data[index] = element;
-    }
-
     public void arrayCopy(int srcPos, int dstPos, int length) {
-        System.arraycopy(data, srcPos, data, dstPos, length);
-    }
-
-    public int binarySearch(long value, int scanDir) {
-
-        // this is the same algorithm as implemented in C (util.h)
-        // template<class T, class V>
-        // inline int64_t binary_search(T *data, V value, int64_t low, int64_t high, int32_t scan_dir)
-        // please ensure these implementations are in sync
-
-        int low = 0;
-        int high = pos - 1;
-        while (high - low > 65) {
-            final int mid = (low + high) >>> 1;
-            final long midVal = data[mid];
-
-            if (midVal < value) {
-                low = mid;
-            } else if (midVal > value) {
-                high = mid - 1;
-            } else {
-                // In case of multiple equal values, find the first
-                return scanDir == BinarySearch.SCAN_UP ?
-                        scrollUp(mid, midVal) :
-                        scrollDown(mid, high, midVal);
-            }
+        lock.writeLock();
+        try {
+            System.arraycopy(data, srcPos, data, dstPos, length);
+        } finally {
+            lock.writeUnlock();
         }
-        return scanDir == BinarySearch.SCAN_UP ?
-                scanUp(value, low, high + 1) :
-                scanDown(value, low, high + 1);
     }
 
     public int binarySearchBlock(int shl, long value, int scanDir) {
@@ -204,22 +107,10 @@ public class SnapshottableLongList implements Mutable, LongVec, Sinkable {
         return data.length;
     }
 
-    public void checkCapacity(int capacity) {
-        if (capacity < 0) {
-            throw new IllegalArgumentException("Negative capacity. Integer overflow may be?");
-        }
-
-        int l = data.length;
-        if (capacity > l) {
-            int newCap = Math.max(l << 1, capacity);
-            long[] buf = new long[newCap];
-            System.arraycopy(data, 0, buf, 0, l);
-            this.data = buf;
-        }
-    }
-
     public void clear() {
+        lock.writeLock();
         pos = 0;
+        lock.writeUnlock();
     }
 
     /**
@@ -230,46 +121,11 @@ public class SnapshottableLongList implements Mutable, LongVec, Sinkable {
         return this == that || that instanceof SnapshottableLongList && equals((SnapshottableLongList) that);
     }
 
-    public void erase() {
-        pos = 0;
-        Arrays.fill(data, noEntryValue);
-    }
-
-    public void extendAndSet(int index, long value) {
-        checkCapacity(index + 1);
-        if (index >= pos) {
-            pos = index + 1;
-        }
-        data[index] = value;
-    }
-
-    public void fill(int from, int to, long value) {
-        Arrays.fill(data, from, to, value);
-    }
-
     public long get(int index) {
         if (index < pos) {
             return data[index];
         }
         throw new ArrayIndexOutOfBoundsException(index);
-    }
-
-    public long getAndSetQuick(int index, long value) {
-        long v = getQuick(index);
-        data[index] = value;
-        return v;
-    }
-
-    /**
-     * Returns last element of the list or null if list is empty.
-     *
-     * @return last element of the list
-     */
-    public long getLast() {
-        if (pos > 0) {
-            return data[pos - 1];
-        }
-        return noEntryValue;
     }
 
     /**
@@ -298,10 +154,6 @@ public class SnapshottableLongList implements Mutable, LongVec, Sinkable {
         return (int) hashCode;
     }
 
-    public void increment(int index) {
-        data[index] = data[index] + 1;
-    }
-
     public int indexOf(long o) {
         for (int i = 0, n = pos; i < n; i++) {
             if (o == getQuick(i)) {
@@ -312,19 +164,15 @@ public class SnapshottableLongList implements Mutable, LongVec, Sinkable {
     }
 
     public void insert(int index, int length) {
-        checkCapacity(pos + length);
-        if (pos > index) {
-            System.arraycopy(data, index, data, index + length, pos - index);
-        }
-        pos += length;
-    }
-
-    public void insertFromSource(int index, SnapshottableLongList src, int srcLo, int srcHi) {
-        assert index > -1 && index < pos + 1 && srcLo > -1 && srcHi - 1 < src.size();
-        int len = srcHi - srcLo;
-        if (len > 0) {
-            insert(index, len);
-            System.arraycopy(src.data, srcLo, data, index, len);
+        lock.writeLock();
+        try {
+            checkCapacity(pos + length);
+            if (pos > index) {
+                System.arraycopy(data, index, data, index + length, pos - index);
+            }
+            pos += length;
+        } finally {
+            lock.writeUnlock();
         }
     }
 
@@ -335,123 +183,62 @@ public class SnapshottableLongList implements Mutable, LongVec, Sinkable {
         return newList;
     }
 
-    public void remove(long v) {
-        int index = indexOf(v);
-        if (index > -1) {
-            removeIndex(index);
-        }
-    }
-
-    public void removeIndex(int index) {
-        if (pos < 1 || index >= pos) {
-            return;
-        }
-        int move = pos - index - 1;
-        if (move > 0) {
-            System.arraycopy(data, index + 1, data, index, move);
-        }
-        data[--pos] = noEntryValue;
-    }
-
-    public void removeIndexBlock(int index, int slotSize) {
-        if (pos < 1 || index >= pos) {
-            return;
-        }
-        int move = pos - index - slotSize;
-        if (move > 0) {
-            System.arraycopy(data, index + slotSize, data, index, move);
-        }
-        pos -= slotSize;
-        Arrays.fill(data, pos, pos + slotSize, noEntryValue);
-    }
-
-    public void restoreInitialCapacity() {
-        data = new long[initialCapacity];
-        pos = 0;
-    }
-
-    public void reverse() {
-        int n = size();
-        for (int i = 0, m = n / 2; i < m; i++) {
-            long tmp = data[i];
-            data[i] = data[n - i - 1];
-            data[n - i - 1] = tmp;
-        }
-    }
-
-    public void seed(int capacity, long value) {
-        checkCapacity(capacity);
-        pos = capacity;
-        fill(0, capacity, value);
-    }
-
-    public void seed(int fromIndex, int count, long value) {
-        int capacity = fromIndex + count;
-        checkCapacity(capacity);
-        Arrays.fill(data, fromIndex, capacity, value);
-    }
-
     public void set(int index, long element) {
-
-        if (index < pos) {
-            data[index] = element;
-            return;
-        }
-        throw new ArrayIndexOutOfBoundsException(index);
-    }
-
-    public void setAll(int capacity, long value) {
-        checkCapacity(capacity);
-        pos = capacity;
-        Arrays.fill(data, value);
-    }
-
-    public void setLast(long value) {
-        if (pos > 0) {
-            data[pos - 1] = value;
+        lock.writeLock();
+        try {
+            if (index < pos) {
+                data[index] = element;
+                return;
+            }
+            throw new ArrayIndexOutOfBoundsException(index);
+        } finally {
+            lock.writeUnlock();
         }
     }
 
     public final void setPos(int pos) {
-        checkCapacity(pos);
-        this.pos = pos;
+        lock.writeLock();
+        try {
+            checkCapacity(pos);
+            this.pos = pos;
+        } finally {
+            lock.writeUnlock();
+        }
     }
 
     public void setQuick(int index, long value) {
         assert index < pos;
+        lock.writeLock();
         data[index] = value;
-    }
-
-    @TestOnly
-    public void shuffle(Rnd rnd, int sh) {
-        // sh is a power of 2 to indicate number of
-        // values stored per virtual "slot". E.g. if
-        // we store two values at a time, we want to shuffle pairs
-        int size = size() >> sh;
-        for (int i = size; i > 1; i--) {
-            swap(i - 1, rnd.nextInt(i), sh);
-        }
+        lock.writeUnlock();
     }
 
     public int size() {
         return pos;
     }
 
-    /**
-     * Sorts the specified array.
-     */
-    public void sort() {
-        LongSort.sort(this, 0, size() - 1);
-    }
+    public SnapshottableLongList snapshot() {
+        if (snapshot == null) {
+            snapshot = new SnapshottableLongList(data.length, noEntryValue);
+        }
+        long stamp = lock.optimisticReadLock();
+        if (stamp == lastSnapshotStamp) {
+            return snapshot;
+        }
+        for (; ; ) {
+            long[] currentData = data;
 
-    public void swap(int i, int j, int shl) {
-        int k = 1 << shl;
-        for (int k1 = 0; k1 < k; k1++) {
-            final int ii = (i << shl) + k1;
-            final int ji = (j << shl) + k1;
-            final long jv = getQuick(ji);
-            setQuick(ji, getQuick(ii));
-            setQuick(ii, jv);
+            if (snapshot.data.length != currentData.length) {
+                snapshot.data = new long[currentData.length];
+            }
+            System.arraycopy(currentData, 0, snapshot.data, 0, currentData.length);
+            snapshot.pos = pos;
+
+            if (lock.validateReadLock(stamp)) {
+                lastSnapshotStamp = stamp;
+                return snapshot;
+            }
+            // spin until we have consistent snapshot
         }
     }
 
@@ -477,8 +264,18 @@ public class SnapshottableLongList implements Mutable, LongVec, Sinkable {
         return sb.toString();
     }
 
-    public void zero(int value) {
-        Arrays.fill(data, 0, pos, value);
+    private void checkCapacity(int capacity) {
+        if (capacity < 0) {
+            throw new IllegalArgumentException("Negative capacity. Integer overflow may be?");
+        }
+
+        int l = data.length;
+        if (capacity > l) {
+            int newCap = Math.max(l << 1, capacity);
+            long[] buf = new long[newCap];
+            System.arraycopy(data, 0, buf, 0, l);
+            this.data = buf;
+        }
     }
 
     private boolean equals(SnapshottableLongList that) {
@@ -496,19 +293,6 @@ public class SnapshottableLongList implements Mutable, LongVec, Sinkable {
         return true;
     }
 
-    private int scanDown(long v, int low, int high) {
-        for (int i = high - 1; i >= low; i--) {
-            long that = data[i];
-            if (that == v) {
-                return i;
-            }
-            if (that < v) {
-                return -(i + 2);
-            }
-        }
-        return -(low + 1);
-    }
-
     private int scanDownBlock(int shl, long v, int low, int high) {
         for (int i = high - 1; i >= low; i--) {
             long that = data[i << shl];
@@ -520,19 +304,6 @@ public class SnapshottableLongList implements Mutable, LongVec, Sinkable {
             }
         }
         return -((low << shl) + 1);
-    }
-
-    private int scanUp(long value, int low, int high) {
-        for (int i = low; i < high; i++) {
-            long that = data[i];
-            if (that == value) {
-                return i;
-            }
-            if (that > value) {
-                return -(i + 1);
-            }
-        }
-        return -(high + 1);
     }
 
     private int scanUpBlock(int shl, long value, int low, int high) {
@@ -548,17 +319,6 @@ public class SnapshottableLongList implements Mutable, LongVec, Sinkable {
         return -((high << shl) + 1);
     }
 
-    private int scrollDown(int low, int high, long value) {
-        do {
-            if (low < high) {
-                low++;
-            } else {
-                return low;
-            }
-        } while (data[low] == value);
-        return low - 1;
-    }
-
     private int scrollDownBlock(int shl, int low, int high, long value) {
         do {
             if (low < high) {
@@ -568,17 +328,6 @@ public class SnapshottableLongList implements Mutable, LongVec, Sinkable {
             }
         } while (data[low << shl] == value);
         return (low - 1) << shl;
-    }
-
-    private int scrollUp(int high, long value) {
-        do {
-            if (high > 0) {
-                high--;
-            } else {
-                return 0;
-            }
-        } while (data[high] == value);
-        return high + 1;
     }
 
     private int scrollUpBlock(int shl, int high, long value) {
