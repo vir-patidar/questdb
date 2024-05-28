@@ -225,20 +225,30 @@ public class SnapshottableLongList implements Mutable, LongVec, Sinkable {
         if (stamp == lastSnapshotStamp) {
             return snapshot;
         }
-        for (; ; ) {
-            long[] currentData = data;
 
-            if (snapshot.data.length != currentData.length) {
-                snapshot.data = new long[currentData.length];
-            }
-            System.arraycopy(currentData, 0, snapshot.data, 0, currentData.length);
-            snapshot.pos = pos;
+        snapshot.lock.writeLock();
+        try {
+            for (; ; ) {
+                long[] currentData = data;
+                assert currentData != null;
 
-            if (lock.validateReadLock(stamp)) {
-                lastSnapshotStamp = stamp;
-                return snapshot;
+                if (snapshot.data.length != currentData.length) {
+                    snapshot.data = new long[currentData.length];
+                }
+
+                System.arraycopy(currentData, 0, snapshot.data, 0, currentData.length);
+                snapshot.pos = pos;
+
+                if (lock.validateReadLock(stamp)) {
+                    lastSnapshotStamp = stamp;
+                    return snapshot;
+                }
+
+                // spin until we have consistent snapshot
+                stamp = lock.optimisticReadLock();
             }
-            // spin until we have consistent snapshot
+        } finally {
+            snapshot.lock.writeUnlock();
         }
     }
 
