@@ -1,3 +1,10 @@
+//Consider adding a url element to the project to provide a link to the project's homepage or repository.
+// It is uses a three Profiles
+
+The project defines three profiles:
+javadoc: for generating Javadoc
+java8: for building with Java 8
+java11+: for building with Java 11 or later
 <!--~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   ~     ___                  _   ____  ____
   ~    / _ \ _   _  ___  ___| |_|  _ \| __ )
