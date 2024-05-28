@@ -243,7 +243,7 @@ public class O3PartitionPurgeJob extends AbstractQueueConsumerJob<O3PartitionPur
                 if (tenant == null) {
                     continue;
                 }
-                if (tenant.isTxnVisible(partitionTimestamp, nameTxn)) {
+                if (tenant.isTxnVisibleConcurrent(partitionTimestamp, nameTxn)) {
                     return false;
                 }
             }

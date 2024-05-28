@@ -373,8 +373,8 @@ public class TableReader implements Closeable, SymbolTableSource {
         return tempMem8b != 0L;
     }
 
-    public boolean isTxnVisible(long partitionTimestamp, long txn) {
-        long partitionNameTxnByPartitionTimestamp = txFile.getPartitionNameTxnByPartitionTimestamp(partitionTimestamp);
+    public boolean isTxnVisibleConcurrent(long partitionTimestamp, long txn) {
+        long partitionNameTxnByPartitionTimestamp = txFile.getPartitionNameTxnByPartitionTimestampConcurrent(partitionTimestamp);
         return partitionNameTxnByPartitionTimestamp == txn;
     }
 

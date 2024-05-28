@@ -274,6 +274,15 @@ public class TxReader implements Closeable, Mutable {
         return defaultValue;
     }
 
+    public long getPartitionNameTxnByPartitionTimestampConcurrent(long ts) {
+        SnapshottableLongList snapshot = attachedPartitions.snapshot();
+        int index = snapshot.binarySearchBlock(LONGS_PER_TX_ATTACHED_PARTITION_MSB, ts, BinarySearch.SCAN_UP);
+        if (index < 0) {
+            return -1;
+        }
+        return snapshot.getQuick(index + PARTITION_NAME_TX_OFFSET);
+    }
+
     public long getPartitionNameTxnByRawIndex(int index) {
         return attachedPartitions.getQuick(index + PARTITION_NAME_TX_OFFSET);
     }
