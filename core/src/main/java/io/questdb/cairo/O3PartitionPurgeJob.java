@@ -235,8 +235,9 @@ public class O3PartitionPurgeJob extends AbstractQueueConsumerJob<O3PartitionPur
         LOG.info().$("processed [table=").$(tableToken).I$();
     }
 
-    private boolean namedTxnInvisibleToReaders(String tableName, long partitionTimestamp, long nameTxn) {
-        AbstractMultiTenantPool.Entry<ReaderPool.R> rEntry = engine.getReaderPoolEntries().get(tableName);
+    private boolean namedTxnInvisibleToReaders(TableToken tableToken, long partitionTimestamp, long nameTxn) {
+        // todo: consider moving this to CairoEngine
+        AbstractMultiTenantPool.Entry<ReaderPool.R> rEntry = engine.getReaderPoolEntries().get(tableToken.getDirName());
         while (rEntry != null) {
             for (int i = 0; i < ReaderPool.ENTRY_SIZE; i++) {
                 ReaderPool.R tenant = rEntry.getTenant(i);
@@ -356,7 +357,6 @@ public class O3PartitionPurgeJob extends AbstractQueueConsumerJob<O3PartitionPur
             // lo points to the beginning element in partitionList, hi next after last
             // each partition folder represented by a pair in the partitionList (partition version, partition timestamp)
             // Skip first pair, start from second and check if it can be deleted.
-            String tableName = tableToken.getTableName();
             for (int i = lo + 2; i < hi; i += 2) {
                 long nextNameVersion = Math.min(lastCommittedPartitionName + 1, partitionList.get(i));
                 long previousNameVersion = partitionList.get(i - 2);
@@ -365,7 +365,7 @@ public class O3PartitionPurgeJob extends AbstractQueueConsumerJob<O3PartitionPur
                         && txnScoreboard.isRangeAvailable(previousNameVersion, nextNameVersion);
 
                 long nameTxnDeleteCandidate = previousNameVersion - 1;
-                if (namedTxnInvisibleToReaders(tableName, partitionTimestamp, nameTxnDeleteCandidate)) {
+                if (namedTxnInvisibleToReaders(tableToken, partitionTimestamp, nameTxnDeleteCandidate)) {
                     path.trimTo(tableRootLen);
                     TableUtils.setPathForPartition(path, partitionBy, partitionTimestamp, nameTxnDeleteCandidate);
                     path.$();
